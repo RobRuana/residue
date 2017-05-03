@@ -1,0 +1,4 @@
+residue package
+===============
+
+.. automodule:: residue
