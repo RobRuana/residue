@@ -2,12 +2,12 @@
 # Copyright (c) 2017 the Residue team, see AUTHORS.
 # Licensed under the BSD License, see LICENSE for details.
 
-"""
-Residue
-
->>> print('Residue')
-Residue
-
-"""
+"""SQLAlchemy CRUD Utilities"""
 
 # flake8: noqa
+
+from __future__ import absolute_import
+from residue._version import __version__
+from residue.query import *
+from residue.types import *
+from residue.utils import *

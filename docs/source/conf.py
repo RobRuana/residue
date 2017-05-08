@@ -51,7 +51,7 @@ extensions = ['sphinx.ext.autodoc',
 
 intersphinx_mapping = {
   'pockets': ('https://pockets.readthedocs.io/en/latest/', None),
-  # 'residue': ('https://residue.readthedocs.io/en/latest/', None),
+  'residue': ('https://residue.readthedocs.io/en/latest/', None),
   'python': ('https://docs.python.org/3.6', None)
 }
 
