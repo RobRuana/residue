@@ -472,16 +472,16 @@ class CrudModelMixin(object):
         # If no repr attr names have been set, default to the set of all
         # unique constraints. This is unordered normally, so we'll order and
         # use it here.
-        if not self._repr_attr_names:
+        if not self.repr_attr_names:
             # this flattens the unique constraint list
             _unique_attrs = chain.from_iterable(self.unique_constraint_column_names)
             _primary_keys = self._get_primary_key_names()
 
             attr_names = tuple(sorted(set(chain(_unique_attrs,
                                                 _primary_keys,
-                                                self._additional_repr_attr_names))))
+                                                self.extra_repr_attr_names))))
         else:
-            attr_names = self._repr_attr_names
+            attr_names = self.repr_attr_names
 
         if not attr_names and hasattr(self, 'id'):
             # there should be SOMETHING, so use id as a fallback
