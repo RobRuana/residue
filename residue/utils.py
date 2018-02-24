@@ -9,13 +9,11 @@ import re
 import uuid
 
 
-__all__ = [
-    'check_constraint_naming_convention', 'default_naming_convention',
-    'fingerprint_sql', 'NAMESPACE_SQL']
+__all__ = ['check_constraint_naming_convention', 'default_naming_convention', 'fingerprint_sql', 'NAMESPACE_SQL']
 
 
 NAMESPACE_SQL = uuid.UUID('75c7e3be-a5c7-414d-bc66-d64ae5d03f3d')
-_single_quote_whitespace = re.compile(r"\s+(?=([^']*'[^']*')*[^']*$)")
+RE_SINGLE_QUOTE_WHITESPACE = re.compile(r"\s+(?=([^']*'[^']*')*[^']*$)")
 
 
 def check_constraint_naming_convention(constraint, table):
@@ -72,7 +70,7 @@ def fingerprint_sql(sqltext):
     Returns:
         str: A 32 character hex uuid5 of a normalized version of `sqltext`.
     """
-    sqltext = _single_quote_whitespace.sub(' ', sqltext).strip()
+    sqltext = RE_SINGLE_QUOTE_WHITESPACE.sub(' ', sqltext).strip()
     return uuid.uuid5(NAMESPACE_SQL, sqltext).hex
 
 

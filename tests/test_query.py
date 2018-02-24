@@ -17,8 +17,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.types import UnicodeText, Date
 
 import residue.query
-from residue.query import constrain_query_by_date, generate_date_series, \
-    normalize_query_by_date, _startswith_digit_re
+from residue.query import constrain_query_by_date, generate_date_series, normalize_query_by_date, RE_STARTSWITH_DIGIT
 
 
 UTCNOW = datetime.datetime.utcnow()
@@ -80,7 +79,7 @@ def granularity(request):
     granularity = request.param
     if not granularity:
         granularity_str = '1 day'
-    elif not _startswith_digit_re.match(granularity):
+    elif not RE_STARTSWITH_DIGIT.match(granularity):
         granularity_str = '1 {}'.format(granularity)
     else:
         granularity_str = granularity
@@ -93,8 +92,7 @@ def test_generate_date_series_start_date_none(end_date, interval, granularity):
     (granularity_param, granularity, granularity_str) = granularity
     start_date_str = end_date.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-    query = generate_date_series(
-        None, end_date_param, interval_param, granularity_param)
+    query = generate_date_series(None, end_date_param, interval_param, granularity_param)
     expression = query.compile(dialect=postgresql.dialect())
     expected = 'generate_series(DATE {} - INTERVAL {}, {}, {})'.format(
         start_date_str, interval_str, end_date_str, granularity_str)
@@ -115,14 +113,12 @@ def test_generate_date_series_end_date_none(start_date, interval, granularity):
         expected = 'generate_series(DATE {} - INTERVAL {}, {}, {})'.format(
             end_date_str, interval_str, end_date_str, granularity_str)
     elif not interval_param:
-        expected = 'generate_series({}, {}, {})'.format(
-            start_date_str, end_date_str, granularity_str)
+        expected = 'generate_series({}, {}, {})'.format(start_date_str, end_date_str, granularity_str)
     else:
         expected = 'generate_series({}, DATE {} + INTERVAL {}, {})'.format(
             start_date_str, end_date_str, interval_str, granularity_str)
 
-    query = generate_date_series(
-        start_date_param, None, interval_param, granularity_param)
+    query = generate_date_series(start_date_param, None, interval_param, granularity_param)
     expression = query.compile(dialect=postgresql.dialect())
     actual = str(expression) % expression.params
     assert expected == actual
@@ -138,8 +134,7 @@ def test_generate_date_series_interval_none(start_date, end_date, granularity):
         expected = 'generate_series(DATE {} - INTERVAL {}, {}, {})'.format(
             end_date_str, interval_str, end_date_str, granularity_str)
     else:
-        expected = 'generate_series({}, {}, {})'.format(
-            start_date_str, end_date_str, granularity_str)
+        expected = 'generate_series({}, {}, {})'.format(start_date_str, end_date_str, granularity_str)
 
     query = generate_date_series(
         start_date_param, end_date_param, None, granularity_param)

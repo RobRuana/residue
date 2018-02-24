@@ -11,16 +11,13 @@ from datetime import datetime
 from sqlalchemy.sql import and_, bindparam, literal, func, select, text, union
 
 
-__all__ = [
-    'constrain_query_by_date', 'generate_date_series',
-    'normalize_query_by_date']
+__all__ = ['constrain_query_by_date', 'generate_date_series', 'normalize_query_by_date']
 
 
-_startswith_digit_re = re.compile(r'^\s*\d+')
+RE_STARTSWITH_DIGIT = re.compile(r'^\s*\d+')
 
 
-def constrain_query_by_date(query, column, start_date=None, end_date=None,
-                            interval='1 month'):
+def constrain_query_by_date(query, column, start_date=None, end_date=None, interval='1 month'):
     """
     Applies a WHERE clause which constrains a query within start and end dates.
 
@@ -56,11 +53,9 @@ def constrain_query_by_date(query, column, start_date=None, end_date=None,
             # start_date plus the interval as the end_date
             return query.where(and_(
                 column >= start_date,
-                column <= text(
-                    'DATE :start_date_param_1 + INTERVAL :interval_param_1',
-                    bindparams=[
-                        bindparam('start_date_param_1', start_date),
-                        bindparam('interval_param_1', interval)])))
+                column <= text('DATE :start_date_param_1 + INTERVAL :interval_param_1', bindparams=[
+                    bindparam('start_date_param_1', start_date),
+                    bindparam('interval_param_1', interval)])))
         else:
             # If ONLY the start_date is defined then we just use that
             return query.where(column >= start_date)
@@ -70,30 +65,24 @@ def constrain_query_by_date(query, column, start_date=None, end_date=None,
             # end_date minus the interval as the start_date
             return query.where(and_(
                 column <= end_date,
-                column >= text(
-                    'DATE :end_date_param_1 - INTERVAL :interval_param_1',
-                    bindparams=[
-                        bindparam('end_date_param_1', end_date),
-                        bindparam('interval_param_1', interval)])))
+                column >= text('DATE :end_date_param_1 - INTERVAL :interval_param_1', bindparams=[
+                    bindparam('end_date_param_1', end_date),
+                    bindparam('interval_param_1', interval)])))
         else:
             # If ONLY the end_date is defined then we just use that
             return query.where(column <= end_date)
     elif interval:
         # If ONLY the interval is defined then we use the current date minus
         # the interval as the start_date
-        return query.where(
-            column >= text(
-                'DATE :current_date_param_1 - INTERVAL :interval_param_1',
-                bindparams=[
-                    bindparam('current_date_param_1', datetime.utcnow()),
-                    bindparam('interval_param_1', interval)]))
+        return query.where(column >= text('DATE :current_date_param_1 - INTERVAL :interval_param_1', bindparams=[
+            bindparam('current_date_param_1', datetime.utcnow()),
+            bindparam('interval_param_1', interval)]))
 
     # If NOTHING was defined then the query is returned unmodified
     return query
 
 
-def generate_date_series(start_date=None, end_date=None, interval='1 month',
-                         granularity='1 day'):
+def generate_date_series(start_date=None, end_date=None, interval='1 month', granularity='1 day'):
     """
     Generates a date series; useful for grouping queries into date "buckets".
 
@@ -115,7 +104,7 @@ def generate_date_series(start_date=None, end_date=None, interval='1 month',
     """
     if not granularity:
         granularity = '1 day'
-    elif not _startswith_digit_re.match(granularity):
+    elif not RE_STARTSWITH_DIGIT.match(granularity):
         granularity = '1 {}'.format(granularity)
 
     if start_date:
@@ -127,16 +116,14 @@ def generate_date_series(start_date=None, end_date=None, interval='1 month',
             # start_date plus the interval as the end_date
             return func.generate_series(
                 start_date,
-                text('DATE :start_date_param_1 + INTERVAL :interval_param_1',
-                     bindparams=[
-                         bindparam('start_date_param_1', start_date),
-                         bindparam('interval_param_1', interval)]),
+                text('DATE :start_date_param_1 + INTERVAL :interval_param_1', bindparams=[
+                     bindparam('start_date_param_1', start_date),
+                     bindparam('interval_param_1', interval)]),
                 granularity)
         else:
             # If ONLY the start_date is defined then we use the current date
             # as the end_date
-            return func.generate_series(
-                start_date, datetime.utcnow(), granularity)
+            return func.generate_series(start_date, datetime.utcnow(), granularity)
 
     if not end_date:
         # If the start_date and end_date are both undefined, we set the
@@ -148,16 +135,14 @@ def generate_date_series(start_date=None, end_date=None, interval='1 month',
         interval = '1 month'
 
     return func.generate_series(
-        text('DATE :end_date_param_1 - INTERVAL :interval_param_1',
-             bindparams=[
-                 bindparam('end_date_param_1', end_date),
-                 bindparam('interval_param_1', interval)]),
+        text('DATE :end_date_param_1 - INTERVAL :interval_param_1', bindparams=[
+            bindparam('end_date_param_1', end_date),
+            bindparam('interval_param_1', interval)]),
         end_date,
         granularity)
 
 
-def normalize_query_by_date(query, date_label, report_label, start_date=None,
-                            end_date=None, interval='1 month',
+def normalize_query_by_date(query, date_label, report_label, start_date=None, end_date=None, interval='1 month',
                             granularity='1 day'):
     """
     Fills in missing date "buckets" for an aggregate query grouped by date.
@@ -207,10 +192,7 @@ def normalize_query_by_date(query, date_label, report_label, start_date=None,
         sqlalchemy.orm.query.Query: A normalized aggregate date query.
     """
     series = generate_date_series(start_date, end_date, interval, granularity)
-    series_query = select([
-        series.label(date_label),
-        literal(0).label(report_label)
-    ])
+    series_query = select([series.label(date_label), literal(0).label(report_label)])
     query = union(query, series_query).alias()
     query = select([
         text(date_label),
