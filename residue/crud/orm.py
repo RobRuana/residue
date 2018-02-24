@@ -5,18 +5,21 @@
 """CRUD support for SQLAlchemy orm objects."""
 
 from __future__ import absolute_import
+import collections
 import inspect
 import re
 import uuid
-from collections import defaultdict, Callable, Mapping
+from collections import defaultdict, Mapping
 from copy import deepcopy
 from itertools import chain
 from datetime import date, datetime, time
 
 import six
-from pockets import cached_classproperty, classproperty, collect_superclass_attr_names, is_data, is_listy, mappify
+from pockets import cached_classproperty, cached_property, classproperty, collect_superclass_attr_names, \
+    is_data, is_listy, mappify
 from pockets.autolog import log
 from sqlalchemy import orm
+from sqlalchemy.ext.associationproxy import AssociationProxy
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.orm.exc import NoResultFound, MultipleResultsFound
@@ -165,10 +168,6 @@ class CrudModelMixin(object):
     # In addition to any default attributes, also show these in the repr.
     extra_repr_attr_names = ()
 
-    # columns that are used as foreign keys, but don't have an explicit
-    # foreign key constraint
-    quasi_foreign_keys = ()
-
     @classmethod
     def _create_or_fetch(cls, session, value, **backref_mapping):
         """
@@ -195,7 +194,6 @@ class CrudModelMixin(object):
             model instance.
         """
         assert len(backref_mapping) <= 1, 'only one backref key is allowed at this time: {}'.format(backref_mapping)
-
         if backref_mapping:
             backref_name = list(backref_mapping.keys())[0]
             parent_id = backref_mapping[backref_name]
@@ -214,34 +212,33 @@ class CrudModelMixin(object):
                 instance = session.query(cls).filter(cls.id == id).first()
             except Exception:
                 log.error('Unable to fetch instance based on id value {!r}', value, exc_info=True)
-                raise TypeError('Invalid instance ID type for relation: {} (value: {})'.format(cls.__name__, value))
+                raise TypeError('Invalid instance ID type for relation: {0.__name__} (value: {1})'.format(cls, value))
         elif isinstance(value, Mapping):
-            # If there's no id, check to see if we have a dictionary that
-            # includes all of the columns associated with a UniqueConstraint.
+            # if there's no id, check to see if we're provided a dictionary
+            # that includes all of the columns associated with a UniqueConstraint.
             for column_names in cls.unique_constraint_column_names:
-                if all((s in value and value[s]) for s in column_names):
+                if all((name in value and value[name]) for name in column_names):
                     # all those column names are provided,
                     # use that to query by chaining together all the necessary
                     # filters to construct that query
                     q = session.query(cls)
-                    filter_kwargs = dict((s, value[s]) for s in column_names)
+                    filter_kwargs = {name: value[name] for name in column_names}
                     try:
                         instance = q.filter_by(**filter_kwargs).one()
                     except NoResultFound:
                         continue
                     except MultipleResultsFound:
-                        log.error('Multiple results found for {} unique constraint: {}', cls.__name__, column_names)
+                        log.error('multiple results found for {} unique constraint: {}', cls.__name__, column_names)
                         raise
                     else:
                         break
                 else:
-                    log.debug('Unable to search using unique constraints: {} with {}', column_names, value)
+                    log.debug('unable to search using unique constraints: {} with {}', column_names, value)
 
         if instance and id is None and backref_mapping and getattr(instance, backref_name, None) != parent_id:
             log.warning(
-                'Attempting to change the owner of {} without an explicitly '
-                'passed id; a new {} instance will be used instead',
-                instance, cls.__name__)
+                'Attempting to change the owner of {} without an explicitly passed id; '
+                'a new {} instance will be used instead', instance, cls.__name__)
             instance = None
 
         if not instance:
@@ -253,29 +250,27 @@ class CrudModelMixin(object):
             session.add(instance)
         return instance
 
-    @property
-    @lru_cache()
+    @cached_property
     def _type_casts_for_to_dict(self):
         type_casts = CrudModelMixin.type_casts.copy()
         type_casts.update(self.type_casts)
         return defaultdict(lambda: lambda x: x, type_casts)
 
-    @classproperty
+    @cached_classproperty
     def to_dict_default_attrs(cls):
         attr_names = []
         super_attr_names = collect_superclass_attr_names(cls, terminal_class=cls.BaseClass)
         for name in super_attr_names:
             if not name.startswith('_') or name in cls.extra_defaults:
                 attr = getattr(cls, name)
-                descriptor = getattr(attr, 'descriptor', None)
 
-                is_attr = not (
-                    callable(attr)
-                    or isinstance(descriptor, hybrid_property)
-                    or isinstance(attr, (property, InstrumentedAttribute, ClauseElement)))
-                is_instrumented = isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, ColumnProperty)
+                is_column_property = isinstance(attr, InstrumentedAttribute) \
+                    and isinstance(attr.property, ColumnProperty)
+                is_hybrid_property = isinstance(getattr(attr, 'descriptor', None), hybrid_property)
+                is_property = isinstance(attr, (property, InstrumentedAttribute, ClauseElement, AssociationProxy))
+                is_callable = callable(attr)
 
-                if is_attr or is_instrumented:
+                if is_column_property or not (is_hybrid_property or is_property or is_callable):
                     attr_names.append(name)
         return attr_names
 
@@ -315,8 +310,7 @@ class CrudModelMixin(object):
                     obj[name] = []
                     for item in attr:
                         if isinstance(item, self.BaseClass):
-                            obj[name].append(
-                                item.to_dict(attrs[name], validator))
+                            obj[name].append(item.to_dict(attrs[name], validator))
                         else:
                             obj[name].append(item)
                 elif callable(attr):
@@ -328,10 +322,10 @@ class CrudModelMixin(object):
 
     def from_dict(self, attrs, validator=lambda self, name, val: True):
         relations = []
-        # Merge_relations modifies the dictionaries that are passed to it in
+        # merge_relations modifies the dictionaries that are passed to it in
         # order to support updates in deeply-nested object graphs. To ensure
         # that we don't have dirty state between applying updates to different
-        # model objects, we need a fresh copy.
+        # model objects, we need a fresh copy
         attrs = deepcopy(attrs)
         for name, value in attrs.items():
             if not name.startswith('_') and validator(self, name, value):
@@ -366,98 +360,95 @@ class CrudModelMixin(object):
 
     def _merge_relations(self, name, value, validator=lambda self, name, val: True):
         attr = getattr(self.__class__, name)
-        if not isinstance(attr, InstrumentedAttribute) or not isinstance(attr.property, RelationshipProperty):
+        if (not isinstance(attr, InstrumentedAttribute) or
+                not isinstance(attr.property, RelationshipProperty)):
             return
 
         session = orm.Session.object_session(self)
-        assert session, "Can't call _merge_relations on objects not attached to a session"
+        assert session, "cannot call _merge_relations on objects not attached to a session"
 
-        attr_property = attr.property
-        relation_cls = attr_property.mapper.class_
+        property = attr.property
+        relation_cls = property.mapper.class_
 
-        # E.g., if this a Team with many Players, and we're handling the
-        # attribute name "players," we want to set the team_id on all
-        # dictionary representations of those players.
+        # e.g., if this a Team with many Players, and we're handling the attribute name
+        # "players," we want to set the team_id on all dictionary representations of those players.
         backref_id_name = self.one_to_many_foreign_key_column_name(name)
         original_value = getattr(self, name)
 
         if is_listy(original_value):
-            new_instances = []
+            new_insts = []
             if value is None:
                 value = []
 
             if isinstance(value, six.string_types):
                 value = [value]
 
-            for item in value:
-                if backref_id_name is not None and isinstance(item, dict) and not item.get(backref_id_name):
-                    item[backref_id_name] = self.id
-
+            for i in value:
+                if backref_id_name is not None and isinstance(i, dict) and not i.get(backref_id_name):
+                    i[backref_id_name] = self.id
                 relation_inst = relation_cls._create_or_fetch(
-                    session, item, **{backref_id_name: self.id} if backref_id_name else {})
-
-                if isinstance(item, dict):
+                    session, i, **{backref_id_name: self.id} if backref_id_name else {})
+                if isinstance(i, dict):
                     if relation_inst._sa_instance_state.identity:
                         validator = _crud_write_validator
                     else:
                         validator = _crud_create_validator
-                    relation_inst.from_dict(item, validator)
-
-                new_instances.append(relation_inst)
+                    relation_inst.from_dict(i, validator)
+                new_insts.append(relation_inst)
 
             relation = original_value
-            remove_instances = [stale for stale in relation if stale not in new_instances]
-            for stale_instance in remove_instances:
-                relation.remove(stale_instance)
-                if attr_property.cascade.delete_orphan:
-                    session.delete(stale_instance)
+            remove_insts = [stale_inst for stale_inst in relation if stale_inst not in new_insts]
 
-            for new_instance in new_instances:
-                if new_instance.id is None or new_instance not in relation:
-                    relation.append(new_instance)
+            for stale_inst in remove_insts:
+                relation.remove(stale_inst)
+                if property.cascade.delete_orphan:
+                    session.delete(stale_inst)
 
-        elif isinstance(value, (Mapping, six.string_types)):
+            for new_inst in new_insts:
+                if new_inst.id is None or new_inst not in relation:
+                    relation.append(new_inst)
+
+        elif isinstance(value, (collections.Mapping, six.string_types)):
             if backref_id_name is not None and not value.get(backref_id_name):
-                # If this is a dictionary, it's possible we're going to be
+                # if this is a dictionary, it's possible we're going to be
                 # creating a new thing, if so, we'll add a backref to the
-                # "parent" if one isn't already set.
+                # "parent" if one isn't already set
                 value[backref_id_name] = self.id
 
-            relation_instance = relation_cls._create_or_fetch(session, value)
-            stale_instance = original_value
-            if stale_instance and stale_instance.id != relation_instance.id and attr_property.cascade.delete_orphan:
-                session.delete(stale_instance)
+            relation_inst = relation_cls._create_or_fetch(session, value)
+            stale_inst = original_value
+            if stale_inst is None or stale_inst.id != relation_inst.id:
+                if stale_inst is not None and property.cascade.delete_orphan:
+                    session.delete(stale_inst)
 
-            if isinstance(value, Mapping):
-                relation_instance.from_dict(value, validator)
-                # We want this this to be immediatelt queryable.
-                session.flush([relation_instance])
+            if isinstance(value, collections.Mapping):
+                relation_inst.from_dict(value, validator)
+                session.flush([relation_inst])    # we want this this to be queryable for other things
 
-            setattr(self, name, relation_instance)
+            setattr(self, name, relation_inst)
 
         elif value is None:
-            # The first branch handles the case of setting a many-to-one value
-            # to None. So this is for the one-to-one-mapping case.
+            # the first branch handles the case of setting a many-to-one value
+            # to None. So this is for the one-to-one-mapping case
             # Setting a relation to None is nullifying the relationship, which
-            # has potential side effects in the case of cascades, etc...
+            # has potential side effects in the case of cascades, etc.
             setattr(self, name, value)
-            stale_instance = original_value
-            if stale_instance and attr_property.cascade.delete_orphan:
-                session.delete(stale_instance)
+            stale_inst = original_value
+            if stale_inst is not None and property.cascade.delete_orphan:
+                session.delete(stale_inst)
 
         else:
-            raise TypeError(
-                'Merging relations on {} not supported for values of type: {} '
-                '(value: {})'.format(name, value.__class__.__name__, value))
+            raise TypeError('merging relations on {1} not support for values '
+                            'of type: {0.__class__.__name__} '
+                            '(value: {0})'.format(value, name))
 
     def __setattr__(self, name, value):
         if name in getattr(self, '_validators', {}):
-            for validator_dict in self._validators[name]:
-                if not validator_dict['model_validator'](self, value):
-                    message = validator_dict.get('validator_message')
-                    raise ValueError(
-                        'Validation failed for {}.{} with value {!r}: {}'
-                        .format(self.__class__.__name__, name, value, message))
+            for val_dict in self._validators[name]:
+                if not val_dict['model_validator'](self, value):
+                    raise ValueError('validation failed for {.__class__.__name__}'
+                                     '.{} with value {!r}: {}'.format(self, name, value,
+                                                                      val_dict.get('validator_message')))
         object.__setattr__(self, name, value)
 
     def crud_read(self, attrs=None):
@@ -481,30 +472,33 @@ class CrudModelMixin(object):
         # If no repr attr names have been set, default to the set of all
         # unique constraints. This is unordered normally, so we'll order and
         # use it here.
-        if not self.repr_attr_names:
-            # Flatten the unique constraint list
-            _unique_attrs = chain(*self.unique_constraint_column_names)
-            _primary_keys = self.primary_key_column_names
+        if not self._repr_attr_names:
+            # this flattens the unique constraint list
+            _unique_attrs = chain.from_iterable(self.unique_constraint_column_names)
+            _primary_keys = self._get_primary_key_names()
 
-            attr_names = tuple(sorted(set(chain(_unique_attrs, _primary_keys, self.extra_repr_attr_names))))
+            attr_names = tuple(sorted(set(chain(_unique_attrs,
+                                                _primary_keys,
+                                                self._additional_repr_attr_names))))
         else:
-            attr_names = self.repr_attr_names
+            attr_names = self._repr_attr_names
 
         if not attr_names and hasattr(self, 'id'):
-            # There should be SOMETHING, so use id as a fallback.
+            # there should be SOMETHING, so use id as a fallback
             attr_names = ('id',)
 
         if attr_names:
-            _kwarg_list = ' '.join('{}={!r}'.format(s, getattr(self, s, 'undefined')) for s in attr_names)
-            kwargs_output = ' {}'.format(_kwarg_list)
+            _kwarg_list = ' '.join('%s=%s' % (name, repr(getattr(self, name, 'undefined')))
+                                   for name in attr_names)
+            kwargs_output = ' %s' % _kwarg_list
         else:
             kwargs_output = ''
 
-        # Specifically using the string interpolation operator and the repr of
+        # specifically using the string interpolation operator and the repr of
         # getattr so as to avoid any "hilarious" encode errors for non-ascii
-        # characters.
-        u_str = '<%s%s>' % (self.__class__.__name__, kwargs_output)
-        return u_str if six.PY3 else u_str.encode('utf-8')
+        # characters
+        u = '<%s%s>' % (self.__class__.__name__, kwargs_output)
+        return u if six.PY3 else u.encode('utf-8')
 
 
 def _crud_read_validator(self, name):
@@ -602,19 +596,14 @@ class crudable(object):
     never_read = ('metadata',)
     never_update = ('id',)
     always_create = ('id',)
-    default_labels = {}
+    default_labels = {'addr': 'Address'}  # TODO: This should be user-definable
 
-    def __init__(
-            self,
-            can_create=True,
-            create=None,
-            no_create=None,
-            read=None,
-            no_read=None,
-            update=None,
-            no_update=None,
-            can_delete=True,
-            data_spec=None):
+    def __init__(self, can_create=True,
+                 create=None, no_create=None,
+                 read=None, no_read=None,
+                 update=None, no_update=None,
+                 can_delete=True,
+                 data_spec=None):
         """
         Args:
             can_create (bool): If True (default), the decorated class can be
@@ -699,8 +688,10 @@ class crudable(object):
         self.data_spec = data_spec or {}
 
     def __call__(self, cls):
+        def _get_crud_perms(cls):
+            if getattr(cls, '_cached_crud_perms', False):
+                return cls._cached_crud_perms
 
-        def _crud_perms(cls):
             crud_perms = {
                 'can_create': self.can_create,
                 'can_delete': self.can_delete,
@@ -717,7 +708,6 @@ class crudable(object):
                     primitives = (int, float, bool, datetime, date, time, six.binary_type, six.text_type, uuid.UUID)
                     if isinstance(attr, properties) or isinstance(attr, primitives):
                         read.append(name)
-
             read = list(set(read))
             for name in read:
                 if not self.no_read or name not in self.no_read:
@@ -725,23 +715,24 @@ class crudable(object):
 
             update = self.update + deepcopy(crud_perms['read'])
             update = list(set(update))
-            for name in filter(lambda s: s not in self.no_update, update):
-                if name in cls.__table__.columns:
-                    crud_perms['update'].append(name)
-                else:
-                    attr = getattr(cls, name)
-                    if (isinstance(attr, property) and getattr(attr, 'fset', False)) or (
-                            isinstance(attr, InstrumentedAttribute)
-                            and isinstance(attr.property, RelationshipProperty)
-                            and attr.property.viewonly is not True):
+            for name in update:
+                if not self.no_update or name not in self.no_update:
+                    if name in cls.__table__.columns:
                         crud_perms['update'].append(name)
+                    else:
+                        attr = getattr(cls, name)
+                        if isinstance(attr, property) and getattr(attr, 'fset', False):
+                            crud_perms['update'].append(name)
+                        elif (isinstance(attr, InstrumentedAttribute) and
+                              isinstance(attr.property, RelationshipProperty) and
+                              attr.property.viewonly != True):  # noqa: E712
+                            crud_perms['update'].append(name)
 
             create = self.create + deepcopy(crud_perms['update'])
             for name in self.always_create:
                 create.append(name)
                 if name in self.no_create:
                     self.no_create.remove(name)
-
             create = list(set(create))
             for name in create:
                 if not self.no_create or name not in self.no_create:
@@ -750,45 +741,49 @@ class crudable(object):
             cls._cached_crud_perms = crud_perms
             return cls._cached_crud_perms
 
-        def _crud_spec(cls):
+        def _get_crud_spec(cls):
+            if getattr(cls, '_cached_crud_spec', False):
+                return cls._cached_crud_spec
+
             crud_perms = cls._crud_perms
 
-            field_names = list(
-                set(crud_perms['read']) |
-                set(crud_perms['update']) |
-                set(crud_perms['create']) |
-                set(self.data_spec.keys()))
-
+            field_names = list(set(crud_perms['read']) | set(crud_perms['update']) |
+                               set(crud_perms['create']) | set(self.data_spec.keys()))
             fields = {}
             for name in field_names:
-                validators = getattr(cls, '_validators', {}).get(name, [])
-                # If using different validation decorators or in the data spec
-                # causes multiple spec kwargs to be specified, we're going to
-                # error here for duplicate keys in dictionaries. Since we don't
-                # want to allow two different expected values for maxLength
-                # being sent in a crud spec for example.
+                # json is implicitly unicode, and since this will eventually
+                # be serialized as json, it's convenient to have it in that
+                # form early
+
+                # if using different validation decorators or in the data spec
+                # causes multiple spec
+                # kwargs to be specified, we're going to error here for
+                # duplicate keys in dictionaries. Since we don't want to allow
+                # two different expected values for maxLength being sent in a
+                # crud spec for example
                 field_validator_kwargs = {
-                    key: value
-                    # Collect each spec_kwarg for all validators of an attr.
-                    for validator in validators
-                    for key, value in validator.get('spec_kwargs', {}).items()
+                    spec_key_name: spec_value
+                    # collect each spec_kwarg for all validators of an attribute
+                    for crud_validator_dict in getattr(cls, '_validators', {}).get(name, [])
+                    for spec_key_name, spec_value in crud_validator_dict.get('spec_kwargs', {}).items()
                 }
 
                 if field_validator_kwargs:
                     self.data_spec.setdefault(name, {})
-                    # Manually specified crud validator keyword arguments
-                    # overwrite the decorator-supplied keyword arguments.
+                    # manually specified crud validator keyword arguments
+                    # overwrite the decorator-supplied keyword arguments
                     field_validator_kwargs.update(self.data_spec[name].get('validators', {}))
                     self.data_spec[name]['validators'] = field_validator_kwargs
 
+                name = six.text_type(name)
                 field = deepcopy(self.data_spec.get(name, {}))
                 field['name'] = name
                 try:
                     attr = getattr(cls, name)
                 except AttributeError:
-                    # If the object doesn't have the attribute, AND it's in the
-                    # field list, that means we're assuming it was manually
-                    # specified in the data_spec argument.
+                    # if the object doesn't have the attribute, AND it's in the field
+                    # list, that means we're assuming it was manually specified in the
+                    # data_spec argument
                     fields[name] = field
                     continue
 
@@ -803,14 +798,13 @@ class crudable(object):
                     continue
 
                 if 'desc' not in field and not is_data(attr):
-                    # No desc specified, but there's a relevant docstring,
-                    # so we use that instead.
+                    # no des specified, and there's a relevant docstring, so use it
 
-                    # If there's 2 consecutive newlines, assume that there's a
+                    # if there's 2 consecutive newlines, assume that there's a
                     # separator in the docstring and that the top part only
                     # is the description, if there's not, use the whole thing.
-                    # Either way, replace newlines with spaces since docstrings
-                    # often break the same sentence accross lines due to space.
+                    # Either way, replace newlines with spaces since docstrings often
+                    # break the same sentence over new lines due to space
                     doc = inspect.getdoc(attr)
                     if doc:
                         doc = doc.partition('\n\n')[0].replace('\n', ' ').strip()
@@ -818,23 +812,18 @@ class crudable(object):
 
                 if 'type' not in field:
                     if isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, ColumnProperty):
-                        col = attr.property.columns[0]
-                        col_type = type(col.type)
-                        field['type'] = cls._type_map.get(col_type, 'auto')
-                        field_default = getattr(col, 'default', None)
-                        # Only put the default here if it exists, and it's not
-                        # an automatic thing like "time.utcnow()".
-                        if field_default is not None \
-                                and field['type'] != 'auto' \
-                                and not isinstance(field_default.arg, (Callable, property)):
+                        field['type'] = cls._type_map.get(type(attr.property.columns[0].type), 'auto')
+                        field_default = getattr(attr.property.columns[0], 'default', None)
+                        # only put the default here if it exists, and it's not an automatic thing like "time.utcnow()"
+                        if field_default is not None and field['type'] != 'auto' \
+                                and not isinstance(field_default.arg, (collections.Callable, property)):
                             field['defaultValue'] = field_default.arg
                     elif hasattr(attr, "default"):
                         field['defaultValue'] = attr.default
                     else:
                         field['type'] = cls._type_map.get(type(attr), 'auto')
-                        # Only set a default if this isn't a property or some
-                        # other kind of "constructed attribute".
-                        if field['type'] != 'auto' and not isinstance(attr, (Callable, property)):
+                        # only set a default if this isn't a property or some other kind of "constructed attribute"
+                        if field['type'] != 'auto' and not isinstance(attr, (collections.Callable, property)):
                             field['defaultValue'] = attr
                 if isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, RelationshipProperty):
                     field['_model'] = attr.property.mapper.class_.__name__
@@ -847,8 +836,8 @@ class crudable(object):
             return dict(cls.type_map_defaults, **cls.type_map)
 
         cls._type_map = cached_classproperty(_type_map)
-        cls._crud_spec = cached_classproperty(_crud_spec)
-        cls._crud_perms = cached_classproperty(_crud_perms)
+        cls._crud_spec = cached_classproperty(_get_crud_spec)
+        cls._crud_perms = cached_classproperty(_get_crud_perms)
         return cls
 
 
@@ -859,11 +848,11 @@ class crud_validation(object):
     Supports adding to the crud spec, or to the save action.
     """
 
-    def __init__(self, attr_name, model_validator, validator_message, **spec_kwargs):
+    def __init__(self, attribute_name, model_validator, validator_message, **spec_kwargs):
         """
 
         Args:
-            attr_name (str): The attribute to which this validator applies.
+            attribute_name (str): The attribute to which this validator applies.
             model_validator (callable): A callable that accepts the attribute
                 value and returns False or None if invalid, or True if the
                 value is valid.
@@ -872,8 +861,9 @@ class crud_validation(object):
                 the crud spec for this attribute name. This generally supports
                 making the same sorts of validations in a client (e.g.
                 javascript).
+
         """
-        self.attr_name = attr_name
+        self.attribute_name = attribute_name
         self.model_validator = model_validator
         self.validator_message = validator_message
         self.spec_kwargs = spec_kwargs
@@ -882,10 +872,10 @@ class crud_validation(object):
         if not hasattr(cls, '_validators'):
             cls._validators = {}
         else:
-            # In case we subclass something with a _validators attribute.
+            # in case we subclass something with a _validators attribute
             cls._validators = deepcopy(cls._validators)
 
-        cls._validators.setdefault(self.attr_name, []).append({
+        cls._validators.setdefault(self.attribute_name, []).append({
             'model_validator': self.model_validator,
             'validator_message': self.validator_message,
             'spec_kwargs': self.spec_kwargs
@@ -894,14 +884,10 @@ class crud_validation(object):
 
 
 class text_length_validation(crud_validation):
-    """
-    Validates the length of a text attribute.
-    """
-    def __init__(
-            self, attr_name, min_length=None, max_length=None,
-            min_text='The minimum length of this field is {0}.',
-            max_text='The maximum length of this field is {0}.',
-            allow_none=True):
+    def __init__(self, attribute_name, min_length=None, max_length=None,
+                 min_text='The minimum length of this field is {0}.',
+                 max_text='The maximum length of this field is {0}.',
+                 allow_none=True):
 
         def model_validator(instance, text):
             if text is None:
@@ -920,31 +906,23 @@ class text_length_validation(crud_validation):
             if max_text is not None:
                 kwargs['maxLengthText'] = max_text
 
-        message = 'Length of value should be between {} and {} (inclusive; ' \
-            'None means no min/max).'.format(min_length, max_length)
-
-        crud_validation.__init__(self, attr_name, model_validator, message, **kwargs)
+        message = 'Length of value should be between {} and {} (inclusive; None means no min/max).'.format(
+            min_length, max_length)
+        crud_validation.__init__(self, attribute_name, model_validator, message, **kwargs)
 
 
 class regex_validation(crud_validation):
-    """
-    Validates a text field against the given regular expression.
-    """
-    def __init__(self, attr_name, regex, message):
+    def __init__(self, attribute_name, regex, message):
 
         def regex_validator(instance, text):
-            # If the field isn't nullable, that will trigger an error later
-            # at the SQLAlchemy level, but since None can't be passed to
-            # re.search() we want to pass this validation check.
+            # if the field isn't nullable, that will trigger an error later at the sqla level,
+            # but since None can't be passed to a re.search we want to pass this validation check
             if text is None:
                 return True
 
+            # we don't want to actually send across the match object if it did match,
+            # so leverage the fact that failing searches or matches return None types
             return re.search(regex, text) is not None
 
-        crud_validation.__init__(
-            self,
-            attr_name,
-            regex_validator,
-            message,
-            regexText=message,
-            regexString=regex)
+        crud_validation.__init__(self, attribute_name, regex_validator, message,
+                                 regexText=message, regexString=regex)
