@@ -104,6 +104,8 @@ class CrudableClass(CrudableMixin, Base):
     int_model_attr = Column(Integer())
     bool_model_attr = Column(Boolean())
 
+    _repr_attr_names = ('string_model_attr',)
+
     @property
     def settable_property(self):
         """this is the docstring"""
@@ -1166,6 +1168,11 @@ class TestCrudableClass(object):
             }
         }
     }
+
+    def test_repr(self):
+        instance = CrudableClass()
+        assert repr(instance).startswith("<CrudableClass string_model_attr=")
+        assert repr(instance).endswith("'default string'>")
 
     def test_crud_spec(self):
         assert self.expected_crud_spec == CrudableClass._crud_spec
