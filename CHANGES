@@ -3,6 +3,12 @@
 This file describes user-visible changes between residue versions.
 
 
+Version 0.2.2 (2018-02-24)
+--------------------------
+
+ * Adds support for AssociationProxy in CrudModelMixin.to_dict_default_attrs
+
+
 Version 0.2.1 (2018-02-24)
 --------------------------
 
