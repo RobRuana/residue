@@ -3,6 +3,12 @@
 This file describes user-visible changes between residue versions.
 
 
+Version 0.2.3 (2018-02-24)
+--------------------------
+
+ * Fixes typo bug, CrudModelMixin._repr_attr_names -> repr_attr_names
+
+
 Version 0.2.2 (2018-02-24)
 --------------------------
 
