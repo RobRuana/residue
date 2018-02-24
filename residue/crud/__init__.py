@@ -37,7 +37,7 @@ expected to be returned.
 
 where:
 - '<model_name>' - the string corresponding to the SQLAlchemy model class name
-    which extends your @sideboard.lib.sa.declarative_base
+    which extends your @residue.declarative_base
 - '<query_label>' - the optional string that signifies the purpose of this
     query and is only used as a convenience for the consumer of the crud
     method. This primarily supports counts, but can used in client code to
@@ -232,3 +232,7 @@ Using the 4 records in the order example (including the order specification):
     this case, the middle 2 results
 
 """
+
+
+from residue.crud.api import *  # noqa: F401,F403
+from residue.crud.orm import *  # noqa: F401,F403

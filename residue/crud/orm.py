@@ -14,8 +14,7 @@ from itertools import chain
 from datetime import date, datetime, time
 
 import six
-from pockets import cached_classproperty, classproperty, \
-    collect_superclass_attr_names, is_data, is_listy, mappify
+from pockets import cached_classproperty, classproperty, collect_superclass_attr_names, is_data, is_listy, mappify
 from pockets.autolog import log
 from sqlalchemy import orm
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -24,19 +23,18 @@ from sqlalchemy.orm.exc import NoResultFound, MultipleResultsFound
 from sqlalchemy.orm.properties import ColumnProperty, RelationshipProperty
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.sql import ClauseElement
-from sqlalchemy.types import Boolean, DateTime, Integer, String, Text, \
-    UnicodeText
+from sqlalchemy.types import Boolean, DateTime, Integer, String, Text, UnicodeText
 
 try:
     from functools import lru_cache
 except ImportError:
-    from backports.functools_lru_cache import lru_cache
+    from backports.functools_lru_cache import lru_cache  # noqa: F401
 
 
 __all__ = [
-    'get_model_by_table', 'get_primary_key_column_names',
-    'get_unique_constraint_column_names',
-    'get_one_to_many_foreign_key_column_names', 'CrudModelMixin']
+    'get_model_by_table', 'get_primary_key_column_names', 'get_unique_constraint_column_names',
+    'get_one_to_many_foreign_key_column_name', 'CrudModelMixin', 'crudable', 'crud_validation',
+    'text_length_validation', 'regex_validation']
 
 
 @lru_cache()
@@ -59,7 +57,7 @@ def get_model_by_table(base, table):
 
 
 @lru_cache()
-def get_one_to_many_foreign_key_column_names(model, name):
+def get_one_to_many_foreign_key_column_name(model, name):
     """
     Returns the constituent column names for the foreign key on the remote
     table of the one-to-many relationship specified by name.
@@ -73,7 +71,7 @@ def get_one_to_many_foreign_key_column_names(model, name):
         list: One-to-many foreign key column names as a list of strings.
     """
     if not inspect.isclass(model):
-        return get_one_to_many_foreign_key_column_names(model.__class__, name)
+        return get_one_to_many_foreign_key_column_name(model.__class__, name)
 
     attr = getattr(model, name, None)
     if not attr:
@@ -196,9 +194,7 @@ class CrudModelMixin(object):
             A previously existing or newly created (and added to the session)
             model instance.
         """
-        assert len(backref_mapping) <= 1, (
-            'only one backref key is allowed at this time: '
-            '{}'.format(backref_mapping))
+        assert len(backref_mapping) <= 1, 'only one backref key is allowed at this time: {}'.format(backref_mapping)
 
         if backref_mapping:
             backref_name = list(backref_mapping.keys())[0]
@@ -216,17 +212,13 @@ class CrudModelMixin(object):
         if id is not None:
             try:
                 instance = session.query(cls).filter(cls.id == id).first()
-            except:
-                log.error(
-                    'Unable to fetch instance based on id value {!r}',
-                    value, exc_info=True)
-                raise TypeError(
-                    'Invalid instance ID type for relation: '
-                    '{} (value: {})'.format(cls.__name__, value))
+            except Exception:
+                log.error('Unable to fetch instance based on id value {!r}', value, exc_info=True)
+                raise TypeError('Invalid instance ID type for relation: {} (value: {})'.format(cls.__name__, value))
         elif isinstance(value, Mapping):
             # If there's no id, check to see if we have a dictionary that
             # includes all of the columns associated with a UniqueConstraint.
-            for column_names in cls.unique_constraint_column_names():
+            for column_names in cls.unique_constraint_column_names:
                 if all((s in value and value[s]) for s in column_names):
                     # all those column names are provided,
                     # use that to query by chaining together all the necessary
@@ -238,19 +230,14 @@ class CrudModelMixin(object):
                     except NoResultFound:
                         continue
                     except MultipleResultsFound:
-                        log.error(
-                            'Multiple results found for {} unique constraint: '
-                            '{}', cls.__name__, column_names)
+                        log.error('Multiple results found for {} unique constraint: {}', cls.__name__, column_names)
                         raise
                     else:
                         break
                 else:
-                    log.debug(
-                        'Unable to search using unique constraints: '
-                        '{} with {}', column_names, value)
+                    log.debug('Unable to search using unique constraints: {} with {}', column_names, value)
 
-        if instance and id is None and backref_mapping and \
-                getattr(instance, backref_name, None) != parent_id:
+        if instance and id is None and backref_mapping and getattr(instance, backref_name, None) != parent_id:
             log.warning(
                 'Attempting to change the owner of {} without an explicitly '
                 'passed id; a new {} instance will be used instead',
@@ -276,21 +263,17 @@ class CrudModelMixin(object):
     @classproperty
     def to_dict_default_attrs(cls):
         attr_names = []
-        super_attr_names = \
-            collect_superclass_attr_names(cls, terminal_cls=cls.BaseClass)
+        super_attr_names = collect_superclass_attr_names(cls, terminal_class=cls.BaseClass)
         for name in super_attr_names:
             if not name.startswith('_') or name in cls.extra_defaults:
                 attr = getattr(cls, name)
                 descriptor = getattr(attr, 'descriptor', None)
 
                 is_attr = not (
-                    callable(attr) or
-                    isinstance(descriptor, hybrid_property) or
-                    isinstance(attr, (
-                        property, InstrumentedAttribute, ClauseElement)))
-
-                is_instrumented = isinstance(attr, InstrumentedAttribute) and \
-                    isinstance(attr.property, ColumnProperty)
+                    callable(attr)
+                    or isinstance(descriptor, hybrid_property)
+                    or isinstance(attr, (property, InstrumentedAttribute, ClauseElement)))
+                is_instrumented = isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, ColumnProperty)
 
                 if is_attr or is_instrumented:
                     attr_names.append(name)
@@ -353,8 +336,7 @@ class CrudModelMixin(object):
         for name, value in attrs.items():
             if not name.startswith('_') and validator(self, name, value):
                 attr = getattr(self.__class__, name)
-                if isinstance(attr, InstrumentedAttribute) and \
-                        isinstance(attr.property, RelationshipProperty):
+                if isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, RelationshipProperty):
                     relations.append((name, value))
                 else:
                     setattr(self, name, value)
@@ -377,20 +359,18 @@ class CrudModelMixin(object):
     def unique_constraint_column_names(cls):
         return get_unique_constraint_column_names(cls)
 
-    @classproperty
-    def one_to_many_foreign_key_column_names(cls, name):
-        return get_one_to_many_foreign_key_column_names(cls, name)
+    @classmethod
+    def one_to_many_foreign_key_column_name(cls, name):
+        column_names = get_one_to_many_foreign_key_column_name(cls, name)
+        return column_names[0] if column_names else None
 
-    def _merge_relations(self, name, value,
-                         validator=lambda self, name, val: True):
+    def _merge_relations(self, name, value, validator=lambda self, name, val: True):
         attr = getattr(self.__class__, name)
-        if not isinstance(attr, InstrumentedAttribute) or \
-                not isinstance(attr.property, RelationshipProperty):
+        if not isinstance(attr, InstrumentedAttribute) or not isinstance(attr.property, RelationshipProperty):
             return
 
         session = orm.Session.object_session(self)
-        assert session, \
-            "Can't call _merge_relations on objects not attached to a session"
+        assert session, "Can't call _merge_relations on objects not attached to a session"
 
         attr_property = attr.property
         relation_cls = attr_property.mapper.class_
@@ -398,7 +378,7 @@ class CrudModelMixin(object):
         # E.g., if this a Team with many Players, and we're handling the
         # attribute name "players," we want to set the team_id on all
         # dictionary representations of those players.
-        backref_id_name = get_one_to_many_foreign_key_column_names(name)
+        backref_id_name = self.one_to_many_foreign_key_column_name(name)
         original_value = getattr(self, name)
 
         if is_listy(original_value):
@@ -410,15 +390,11 @@ class CrudModelMixin(object):
                 value = [value]
 
             for item in value:
-                if backref_id_name is not None \
-                        and isinstance(item, dict) \
-                        and not item.get(backref_id_name):
+                if backref_id_name is not None and isinstance(item, dict) and not item.get(backref_id_name):
                     item[backref_id_name] = self.id
 
                 relation_inst = relation_cls._create_or_fetch(
-                    session,
-                    item,
-                    **{backref_id_name: self.id} if backref_id_name else {})
+                    session, item, **{backref_id_name: self.id} if backref_id_name else {})
 
                 if isinstance(item, dict):
                     if relation_inst._sa_instance_state.identity:
@@ -430,9 +406,7 @@ class CrudModelMixin(object):
                 new_instances.append(relation_inst)
 
             relation = original_value
-            remove_instances = [
-                stale for stale in relation if stale not in new_instances]
-
+            remove_instances = [stale for stale in relation if stale not in new_instances]
             for stale_instance in remove_instances:
                 relation.remove(stale_instance)
                 if attr_property.cascade.delete_orphan:
@@ -451,8 +425,7 @@ class CrudModelMixin(object):
 
             relation_instance = relation_cls._create_or_fetch(session, value)
             stale_instance = original_value
-            if stale_instance and stale_instance.id != relation_instance.id \
-                    and attr_property.cascade.delete_orphan:
+            if stale_instance and stale_instance.id != relation_instance.id and attr_property.cascade.delete_orphan:
                 session.delete(stale_instance)
 
             if isinstance(value, Mapping):
@@ -503,6 +476,7 @@ class CrudModelMixin(object):
         Note:
             __repr__ does NOT return unicode on Python 2, since python decodes
             it using the default encoding: http://bugs.python.org/issue5876.
+
         """
         # If no repr attr names have been set, default to the set of all
         # unique constraints. This is unordered normally, so we'll order and
@@ -512,8 +486,7 @@ class CrudModelMixin(object):
             _unique_attrs = chain(*self.unique_constraint_column_names)
             _primary_keys = self.primary_key_column_names
 
-            attr_names = tuple(sorted(set(chain(
-                _unique_attrs, _primary_keys, self.extra_repr_attr_names))))
+            attr_names = tuple(sorted(set(chain(_unique_attrs, _primary_keys, self.extra_repr_attr_names))))
         else:
             attr_names = self.repr_attr_names
 
@@ -522,9 +495,7 @@ class CrudModelMixin(object):
             attr_names = ('id',)
 
         if attr_names:
-            _kwarg_list = ' '.join(
-                '{}={!r}'.format(s, getattr(self, s, 'undefined'))
-                for s in attr_names)
+            _kwarg_list = ' '.join('{}={!r}'.format(s, getattr(self, s, 'undefined')) for s in attr_names)
             kwargs_output = ' {}'.format(_kwarg_list)
         else:
             kwargs_output = ''
@@ -539,9 +510,7 @@ class CrudModelMixin(object):
 def _crud_read_validator(self, name):
     _crud_perms = getattr(self, '_crud_perms', None)
     if _crud_perms is not None and not _crud_perms.get('read', True):
-        raise ValueError(
-            'Attempt to read non-readable model '
-            '{}'.format(self.__class__.__name__))
+        raise ValueError('Attempt to read non-readable model {}'.format(self.__class__.__name__))
     elif name in self.extra_defaults:
         return True
     elif _crud_perms is None:
@@ -555,13 +524,9 @@ def _crud_write_validator(self, name, value=None):
     if getattr(self, name, None) == value:
         return True
     elif not _crud_perms or not _crud_perms.get('update', False):
-        raise ValueError(
-            'Attempt to update non-updateable model '
-            '{}'.format(self.__class__.__name__))
+        raise ValueError('Attempt to update non-updateable model {}'.format(self.__class__.__name__))
     elif name not in _crud_perms.get('update', {}):
-        raise ValueError(
-            'Attempt to update non-updateable attribute '
-            '{}.{}'.format(self.__class__.__name__, name))
+        raise ValueError('Attempt to update non-updateable attribute {}.{}'.format(self.__class__.__name__, name))
     else:
         return name in _crud_perms.get("update", {})
 
@@ -569,9 +534,7 @@ def _crud_write_validator(self, name, value=None):
 def _crud_create_validator(self, name, value=None):
     _crud_perms = getattr(self, '_crud_perms', {})
     if not _crud_perms or not _crud_perms.get('can_create', False):
-        raise ValueError(
-            'Attempt to create non-createable model '
-            '{}'.format(self.__class__.__name__))
+        raise ValueError('Attempt to create non-createable model {}'.format(self.__class__.__name__))
     else:
         return name in _crud_perms.get("create", {})
 
@@ -726,11 +689,9 @@ class crudable(object):
         self.read = read or []
         self.no_read = no_read or []
         self.update = update or []
-        self.no_update = no_update or \
-            [x for x in self.no_read if x not in self.update]
+        self.no_update = no_update or [x for x in self.no_read if x not in self.update]
         self.create = create or []
-        self.no_create = no_create or \
-            [x for x in self.no_update if x not in self.create]
+        self.no_create = no_create or [x for x in self.no_update if x not in self.create]
 
         self.no_read.extend(self.never_read)
         self.no_update.extend(self.never_update)
@@ -752,14 +713,9 @@ class crudable(object):
             for name in collect_superclass_attr_names(cls):
                 if not name.startswith('_'):
                     attr = getattr(cls, name)
-                    is_instrumented = isinstance(attr, (
-                        InstrumentedAttribute, property, ClauseElement))
-
-                    is_type = isinstance(attr, (
-                        int, float, bool, datetime, date, time,
-                        six.binary_type, six.text_type, uuid.UUID))
-
-                    if is_instrumented or is_type:
+                    properties = (InstrumentedAttribute, property, ClauseElement)
+                    primitives = (int, float, bool, datetime, date, time, six.binary_type, six.text_type, uuid.UUID)
+                    if isinstance(attr, properties) or isinstance(attr, primitives):
                         read.append(name)
 
             read = list(set(read))
@@ -774,11 +730,10 @@ class crudable(object):
                     crud_perms['update'].append(name)
                 else:
                     attr = getattr(cls, name)
-                    if (isinstance(attr, property) and
-                        getattr(attr, 'fset', False)) or (
-                            isinstance(attr, InstrumentedAttribute) and
-                            isinstance(attr.property, RelationshipProperty) and
-                            attr.property.viewonly is not True):
+                    if (isinstance(attr, property) and getattr(attr, 'fset', False)) or (
+                            isinstance(attr, InstrumentedAttribute)
+                            and isinstance(attr.property, RelationshipProperty)
+                            and attr.property.viewonly is not True):
                         crud_perms['update'].append(name)
 
             create = self.create + deepcopy(crud_perms['update'])
@@ -823,9 +778,7 @@ class crudable(object):
                     self.data_spec.setdefault(name, {})
                     # Manually specified crud validator keyword arguments
                     # overwrite the decorator-supplied keyword arguments.
-                    field_validator_kwargs.update(
-                        self.data_spec[name].get('validators', {}))
-
+                    field_validator_kwargs.update(self.data_spec[name].get('validators', {}))
                     self.data_spec[name]['validators'] = field_validator_kwargs
 
                 field = deepcopy(self.data_spec.get(name, {}))
@@ -860,24 +813,20 @@ class crudable(object):
                     # often break the same sentence accross lines due to space.
                     doc = inspect.getdoc(attr)
                     if doc:
-                        doc = doc.partition('\n\n')[0] \
-                            .replace('\n', ' ').strip()
+                        doc = doc.partition('\n\n')[0].replace('\n', ' ').strip()
                         field['desc'] = doc
 
                 if 'type' not in field:
-                    if isinstance(attr, InstrumentedAttribute) and \
-                            isinstance(attr.property, ColumnProperty):
-
+                    if isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, ColumnProperty):
                         col = attr.property.columns[0]
                         col_type = type(col.type)
                         field['type'] = cls._type_map.get(col_type, 'auto')
                         field_default = getattr(col, 'default', None)
                         # Only put the default here if it exists, and it's not
                         # an automatic thing like "time.utcnow()".
-                        if field_default is not None and \
-                                field['type'] != 'auto' and \
-                                not isinstance(field_default.arg, (
-                                    Callable, property)):
+                        if field_default is not None \
+                                and field['type'] != 'auto' \
+                                and not isinstance(field_default.arg, (Callable, property)):
                             field['defaultValue'] = field_default.arg
                     elif hasattr(attr, "default"):
                         field['defaultValue'] = attr.default
@@ -885,11 +834,9 @@ class crudable(object):
                         field['type'] = cls._type_map.get(type(attr), 'auto')
                         # Only set a default if this isn't a property or some
                         # other kind of "constructed attribute".
-                        if field['type'] != 'auto' and \
-                                not isinstance(attr, (Callable, property)):
+                        if field['type'] != 'auto' and not isinstance(attr, (Callable, property)):
                             field['defaultValue'] = attr
-                if isinstance(attr, InstrumentedAttribute) and \
-                        isinstance(attr.property, RelationshipProperty):
+                if isinstance(attr, InstrumentedAttribute) and isinstance(attr.property, RelationshipProperty):
                     field['_model'] = attr.property.mapper.class_.__name__
 
             crud_spec = {'fields': fields}
@@ -912,12 +859,12 @@ class crud_validation(object):
     Supports adding to the crud spec, or to the save action.
     """
 
-    def __init__(self, attr_name, validator, validator_message, **spec_kwargs):
+    def __init__(self, attr_name, model_validator, validator_message, **spec_kwargs):
         """
 
         Args:
             attr_name (str): The attribute to which this validator applies.
-            validator (callable): A callable that accepts the attribute
+            model_validator (callable): A callable that accepts the attribute
                 value and returns False or None if invalid, or True if the
                 value is valid.
             validator_message (str): Failure message if the validation fails.
@@ -927,7 +874,7 @@ class crud_validation(object):
                 javascript).
         """
         self.attr_name = attr_name
-        self.validator = validator
+        self.model_validator = model_validator
         self.validator_message = validator_message
         self.spec_kwargs = spec_kwargs
 
@@ -939,7 +886,7 @@ class crud_validation(object):
             cls._validators = deepcopy(cls._validators)
 
         cls._validators.setdefault(self.attr_name, []).append({
-            'validator': self.validator,
+            'model_validator': self.model_validator,
             'validator_message': self.validator_message,
             'spec_kwargs': self.spec_kwargs
         })
@@ -956,7 +903,7 @@ class text_length_validation(crud_validation):
             max_text='The maximum length of this field is {0}.',
             allow_none=True):
 
-        def validator(instance, text):
+        def model_validator(instance, text):
             if text is None:
                 return allow_none
             text_length = len(six.text_type(text))
@@ -976,7 +923,7 @@ class text_length_validation(crud_validation):
         message = 'Length of value should be between {} and {} (inclusive; ' \
             'None means no min/max).'.format(min_length, max_length)
 
-        crud_validation.__init__(self, attr_name, validator, message, **kwargs)
+        crud_validation.__init__(self, attr_name, model_validator, message, **kwargs)
 
 
 class regex_validation(crud_validation):
