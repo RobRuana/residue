@@ -277,7 +277,10 @@ class CrudModelMixin(object):
     def to_dict(self, attrs=None, validator=lambda self, name: True):
         obj = {}
         if attrs is not None:
-            attrs = mappify(attrs)
+            try:
+                attrs = mappify(attrs)
+            except TypeError:
+                attrs = None
 
         # It's still possible for the client to blacklist this, but by default
         # we're going to include them.
