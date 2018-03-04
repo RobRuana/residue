@@ -3,6 +3,13 @@
 This file describes user-visible changes between residue versions.
 
 
+Version 0.2.7 (2018-03-04)
+--------------------------
+
+ * Fixes and adds tests to ensure that to_dict_default_attrs ignores both
+   classproperty and cached_classproperty
+
+
 Version 0.2.6 (2018-03-04)
 --------------------------
 
@@ -42,11 +49,11 @@ Version 0.2.1 (2018-02-24)
 Version 0.2 (2018-02-24)
 ------------------------
 
-* Actual working code.
+ * Actual working code.
 
 
 
 Version 0.1 (2017-05-03)
 ------------------------
 
-* Initial version.
+ * Initial version.
