@@ -267,7 +267,9 @@ class CrudModelMixin(object):
                 is_column_property = isinstance(attr, InstrumentedAttribute) \
                     and isinstance(attr.property, ColumnProperty)
                 is_hybrid_property = isinstance(getattr(attr, 'descriptor', None), hybrid_property)
-                is_property = isinstance(attr, (property, InstrumentedAttribute, ClauseElement, AssociationProxy))
+                is_property = isinstance(attr, (
+                    property, classproperty, cached_classproperty,
+                    InstrumentedAttribute, ClauseElement, AssociationProxy))
                 is_callable = callable(attr)
 
                 if is_column_property or not (is_hybrid_property or is_property or is_callable):
