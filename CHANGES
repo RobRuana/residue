@@ -3,6 +3,13 @@
 This file describes user-visible changes between residue versions.
 
 
+Version 0.2.8 (2018-08-16)
+--------------------------
+
+ * Adds a _defer_defaults_ argument to model constructors to optionally
+   avoid costly column.default.execute() calls
+
+
 Version 0.2.7 (2018-03-04)
 --------------------------
 
