@@ -230,6 +230,9 @@ class TestDeclarativeBaseConstructor(object):
     def test_default_init(self):
         assert User().id  # default is applied at initialization instead of on save
 
+    def test_defer_default_init(self):
+        assert User(_defer_defaults_=True).id is None  # default is NOT applied at initialization
+
     def test_overriden_init(self):
         @declarative_base
         class WithOverriddenInit(object):
