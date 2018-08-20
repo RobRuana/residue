@@ -6,7 +6,7 @@ from datetime import datetime
 import pytest
 
 import sqlalchemy
-from pockets import listify
+from pockets import listify, cached_classproperty, classproperty
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import Boolean, Integer, UnicodeText
@@ -105,6 +105,14 @@ class CrudableClass(CrudableMixin, Base):
     bool_model_attr = Column(Boolean())
 
     _repr_attr_names = ('string_model_attr',)
+
+    @cached_classproperty
+    def test_cached_classproperty(cls):
+        return 'test_cached_classproperty_value'
+
+    @classproperty
+    def test_classproperty(cls):
+        return 'test_classproperty_value'
 
     @property
     def settable_property(self):
@@ -221,6 +229,9 @@ class TestNamingConventions(object):
 class TestDeclarativeBaseConstructor(object):
     def test_default_init(self):
         assert User().id  # default is applied at initialization instead of on save
+
+    def test_defer_default_init(self):
+        assert User(_defer_defaults_=True).id is None  # default is NOT applied at initialization
 
     def test_overriden_init(self):
         @declarative_base
@@ -1132,6 +1143,22 @@ class TestCrudableClass(object):
                 'create': True,
                 'read': True,
                 'update': True,
+            },
+            'test_cached_classproperty': {
+                'type': 'string',
+                'defaultValue': 'test_cached_classproperty_value',
+                'name': 'test_cached_classproperty',
+                'create': False,
+                'read': True,
+                'update': False,
+            },
+            'test_classproperty': {
+                'type': 'string',
+                'defaultValue': 'test_classproperty_value',
+                'name': 'test_classproperty',
+                'create': False,
+                'read': True,
+                'update': False,
             },
             'unsettable_property': {
                 'desc': 'this is an epydoc-decorated docstring',

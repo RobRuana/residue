@@ -263,14 +263,16 @@ class CrudModelMixin(object):
         for name in super_attr_names:
             if not name.startswith('_') or name in cls.extra_defaults:
                 attr = getattr(cls, name)
+                class_attr = getattr(cls, '__dict__', {}).get(name)
 
-                is_column_property = isinstance(attr, InstrumentedAttribute) \
+                is_column_prop = isinstance(attr, InstrumentedAttribute) \
                     and isinstance(attr.property, ColumnProperty)
-                is_hybrid_property = isinstance(getattr(attr, 'descriptor', None), hybrid_property)
-                is_property = isinstance(attr, (property, InstrumentedAttribute, ClauseElement, AssociationProxy))
+                is_hybrid_prop = isinstance(getattr(attr, 'descriptor', None), hybrid_property)
+                is_prop = isinstance(attr, (property, InstrumentedAttribute, ClauseElement, AssociationProxy))
+                is_class_prop = isinstance(class_attr, (classproperty, cached_classproperty))
                 is_callable = callable(attr)
 
-                if is_column_property or not (is_hybrid_property or is_property or is_callable):
+                if is_column_prop or not (is_hybrid_prop or is_prop or is_class_prop or is_callable):
                     attr_names.append(name)
         return attr_names
 
